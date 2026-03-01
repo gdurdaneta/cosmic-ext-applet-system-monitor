@@ -238,7 +238,7 @@ impl SystemMonitorApplet {
             .map(|elements| self.panel_collection(elements, self.config.layout.inner_spacing, 0.0));
 
         let items = self.panel_collection(item_iter, self.config.layout.spacing, self.padding());
-        container(items).style(base_background).into()
+        container(items).into()
     }
 
     pub fn main_button<'a>(&self, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
@@ -248,36 +248,36 @@ impl SystemMonitorApplet {
     pub fn settings_popup_view(&'_ self) -> Element<'_, Message> {
         let modules = self.config.ui.enabled_modules;
         let text_format_row = Row::with_children(vec![
-            button::text("Compacto")
+            button::custom(text("Compacto").size(14))
                 .on_press(Message::SetTextFormatMode(TextFormatMode::Compact))
                 .into(),
-            button::text("Etiquetas")
+            button::custom(text("Etiquetas").size(14))
                 .on_press(Message::SetTextFormatMode(TextFormatMode::Labeled))
                 .into(),
         ])
         .spacing(8.0);
 
         let icon_mode_row = Row::with_children(vec![
-            button::text("Auto")
+            button::custom(text("Auto").size(14))
                 .on_press(Message::SetIconColorMode(IconColorMode::Auto))
                 .into(),
-            button::text("Blanco")
+            button::custom(text("Blanco").size(14))
                 .on_press(Message::SetIconColorMode(IconColorMode::White))
                 .into(),
-            button::text("Negro")
+            button::custom(text("Negro").size(14))
                 .on_press(Message::SetIconColorMode(IconColorMode::Black))
                 .into(),
         ])
         .spacing(8.0);
 
         let interval_row = Row::with_children(vec![
-            button::text("Rapido")
+            button::custom(text("Rápido").size(14))
                 .on_press(Message::SetQuickIntervalProfile(QuickIntervalProfile::Fast))
                 .into(),
-            button::text("Normal")
+            button::custom(text("Normal").size(14))
                 .on_press(Message::SetQuickIntervalProfile(QuickIntervalProfile::Normal))
                 .into(),
-            button::text("Lento")
+            button::custom(text("Lento").size(14))
                 .on_press(Message::SetQuickIntervalProfile(QuickIntervalProfile::Slow))
                 .into(),
         ])

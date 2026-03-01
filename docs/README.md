@@ -1,10 +1,15 @@
 # Configuring the applet
 
-You can configure the applet editing the files in `~/.config/cosmic/dev.DBrox.CosmicSystemMonitor/v2/`.
+**No hay panel de configuración gráfico.** La configuración se hace editando el archivo RON:
 
-The configuration is divided in 3 files:
+- **Ubicación**: `~/.config/dev.DBrox.CosmicSystemMonitor.ron`
+- El applet recarga la config automáticamente cuando detecta cambios.
 
-- [Components](./Components.md): controls what resource monitors are displayed and how they are viewed
-- [Sampling](./Sampling.md): controls the speed of the sampling and how many samples are stored for each of the resources monitored
-- [Layout](./Layout.md): controls the padding and spacing of the components
+También puedes editar los archivos en `~/.config/cosmic/dev.DBrox.CosmicSystemMonitor/v2/` si usas esa estructura.
+
+La configuración se divide en:
+
+- [Components](./Components.md): qué monitores se muestran y en qué formato (Text, Bar, RunChart)
+- [Sampling](./Sampling.md): intervalo de actualización (por defecto 5 s) y ventana de muestras
+- [Layout](./Layout.md): padding y espaciado
 

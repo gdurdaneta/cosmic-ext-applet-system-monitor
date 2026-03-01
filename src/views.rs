@@ -6,14 +6,30 @@ use crate::{
         gpu::GpuData,
         run::{SimpleHistoryChart, SuperimposedHistoryChart},
     },
-    config::{CpuView, IoView, PaddingOption, PercentView},
+    config::{
+        ComponentConfig, CpuView, IconColorMode, IoView, PaddingOption, PercentView,
+        QuickIntervalProfile, TextFormatMode,
+    },
 };
 use cosmic::{
     Apply, Element, Renderer, Theme,
     iced::{Alignment, Padding, Pixels, Size, padding},
-    widget::{Column, Container, Row, container},
+    widget::{Column, Container, Row, button, container, icon, list_column, settings, text, toggler},
 };
+use std::sync::LazyLock;
 use sysinfo::Cpu;
+
+// Iconos SVG embebidos (siempre visibles, no dependen del tema)
+static ICON_CPU: LazyLock<cosmic::widget::icon::Handle> =
+    LazyLock::new(|| icon::from_svg_bytes(include_bytes!("../res/icons/cpu.svg")));
+static ICON_MEMORY: LazyLock<cosmic::widget::icon::Handle> =
+    LazyLock::new(|| icon::from_svg_bytes(include_bytes!("../res/icons/memory.svg")));
+static ICON_DISK: LazyLock<cosmic::widget::icon::Handle> =
+    LazyLock::new(|| icon::from_svg_bytes(include_bytes!("../res/icons/disk.svg")));
+static ICON_GPU: LazyLock<cosmic::widget::icon::Handle> =
+    LazyLock::new(|| icon::from_svg_bytes(include_bytes!("../res/icons/gpu.svg")));
+static ICON_NETWORK: LazyLock<cosmic::widget::icon::Handle> =
+    LazyLock::new(|| icon::from_svg_bytes(include_bytes!("../res/icons/network.svg")));
 
 fn sized_container<'a>(
     content: impl Into<Element<'a, Message>>,
@@ -23,6 +39,18 @@ fn sized_container<'a>(
         .width(size.width)
         .height(size.height)
         .style(base_background)
+}
+
+fn icon_style(theme: &Theme, mode: IconColorMode) -> container::Style {
+    let color = match mode {
+        IconColorMode::Auto => cosmic::iced::Color::from(theme.cosmic().primary.on),
+        IconColorMode::White => cosmic::iced::Color::WHITE,
+        IconColorMode::Black => cosmic::iced::Color::BLACK,
+    };
+    container::Style {
+        icon_color: Some(color),
+        ..container::Style::default()
+    }
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -53,8 +81,11 @@ fn format_percentage(current: u64, total: u64) -> String {
     }
 }
 
-pub fn format_cpu_tooltip(usage: f32) -> String {
-    format!("CPU: {usage:.1}%")
+pub fn format_cpu_tooltip(usage: f32, temperature: Option<f32>) -> String {
+    match temperature {
+        Some(temp) => format!("CPU: {usage:.1}%\nTemp: {temp:.1}°C"),
+        None => format!("CPU: {usage:.1}%"),
+    }
 }
 
 fn format_gpu_tooltip(gpu_index: usize, gpu_data: &GpuData) -> String {
@@ -153,6 +184,150 @@ impl SystemMonitorApplet {
         let current_rate = history.iter().last().copied().unwrap_or(0);
         let operation = if is_write { "Write" } else { "Read" };
         format!("Disk {}: {}/s", operation, format_bytes(current_rate))
+    }
+
+    fn disk_space_used(&self) -> (u64, u64) {
+        self.disks.iter().fold((0u64, 0u64), |(total, used), d| {
+            let t = d.total_space();
+            let avail = d.available_space();
+            (total + t, used + t.saturating_sub(avail))
+        })
+    }
+
+    fn format_disk_space_tooltip(&self) -> String {
+        let (total, used) = self.disk_space_used();
+        let pct = if total > 0 {
+            format_percentage(used, total)
+        } else {
+            "N/A".to_string()
+        };
+        format!(
+            "Disco: {} / {} ({})",
+            format_bytes(used),
+            format_bytes(total),
+            pct
+        )
+    }
+
+    fn uses_labeled_text(&self) -> bool {
+        matches!(self.config.ui.text_format_mode, TextFormatMode::Labeled)
+    }
+
+    fn visible_cpu_temperature(&self) -> Option<f32> {
+        if self.config.ui.show_cpu_temperature {
+            self.cpu_temperature
+        } else {
+            None
+        }
+    }
+
+    pub fn main_content(&'_ self) -> Element<'_, Message> {
+        let enabled = self.config.ui.enabled_modules;
+        let item_iter = self
+            .config
+            .components
+            .iter()
+            .filter_map(|module| match module {
+                ComponentConfig::Cpu(vis) if enabled.cpu => Some(self.cpu_view(vis)),
+                ComponentConfig::Mem(vis) if enabled.mem => Some(self.mem_view(vis)),
+                ComponentConfig::Net(vis) if enabled.net => Some(self.net_view(vis)),
+                ComponentConfig::Disk(vis) if enabled.disk => Some(self.disk_view(vis)),
+                ComponentConfig::Gpu(vis) if enabled.gpu => Some(self.gpu_view(vis)),
+                _ => None,
+            })
+            .map(|elements| self.panel_collection(elements, self.config.layout.inner_spacing, 0.0));
+
+        let items = self.panel_collection(item_iter, self.config.layout.spacing, self.padding());
+        container(items).style(base_background).into()
+    }
+
+    pub fn main_button<'a>(&self, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+        button::custom(content).padding(0).on_press(Message::TogglePopup).into()
+    }
+
+    pub fn settings_popup_view(&'_ self) -> Element<'_, Message> {
+        let modules = self.config.ui.enabled_modules;
+        let text_format_row = Row::with_children(vec![
+            button::text("Compacto")
+                .on_press(Message::SetTextFormatMode(TextFormatMode::Compact))
+                .into(),
+            button::text("Etiquetas")
+                .on_press(Message::SetTextFormatMode(TextFormatMode::Labeled))
+                .into(),
+        ])
+        .spacing(8.0);
+
+        let icon_mode_row = Row::with_children(vec![
+            button::text("Auto")
+                .on_press(Message::SetIconColorMode(IconColorMode::Auto))
+                .into(),
+            button::text("Blanco")
+                .on_press(Message::SetIconColorMode(IconColorMode::White))
+                .into(),
+            button::text("Negro")
+                .on_press(Message::SetIconColorMode(IconColorMode::Black))
+                .into(),
+        ])
+        .spacing(8.0);
+
+        let interval_row = Row::with_children(vec![
+            button::text("Rapido")
+                .on_press(Message::SetQuickIntervalProfile(QuickIntervalProfile::Fast))
+                .into(),
+            button::text("Normal")
+                .on_press(Message::SetQuickIntervalProfile(QuickIntervalProfile::Normal))
+                .into(),
+            button::text("Lento")
+                .on_press(Message::SetQuickIntervalProfile(QuickIntervalProfile::Slow))
+                .into(),
+        ])
+        .spacing(8.0);
+
+        let content = list_column()
+            .padding(8)
+            .spacing(0)
+            .add(settings::item(
+                "CPU",
+                container(
+                    toggler(modules.cpu).on_toggle(|v| Message::ToggleModuleCpu(v)),
+                ),
+            ))
+            .add(settings::item(
+                "RAM",
+                container(
+                    toggler(modules.mem).on_toggle(|v| Message::ToggleModuleMem(v)),
+                ),
+            ))
+            .add(settings::item(
+                "Red",
+                container(
+                    toggler(modules.net).on_toggle(|v| Message::ToggleModuleNet(v)),
+                ),
+            ))
+            .add(settings::item(
+                "Disco",
+                container(
+                    toggler(modules.disk).on_toggle(|v| Message::ToggleModuleDisk(v)),
+                ),
+            ))
+            .add(settings::item(
+                "GPU",
+                container(
+                    toggler(modules.gpu).on_toggle(|v| Message::ToggleModuleGpu(v)),
+                ),
+            ))
+            .add(settings::item(
+                "Mostrar temperatura CPU",
+                container(
+                    toggler(self.config.ui.show_cpu_temperature)
+                        .on_toggle(|v| Message::ToggleCpuTemperature(v)),
+                ),
+            ))
+            .add(settings::item("Formato de texto", text_format_row))
+            .add(settings::item("Color de iconos", icon_mode_row))
+            .add(settings::item("Intervalo", interval_row));
+
+        Element::from(self.core.applet.popup_container(content))
     }
 
     fn size_aspect_ratio(&self, aspect_ratio: f32) -> Size {
@@ -306,16 +481,63 @@ impl SystemMonitorApplet {
         .apply(|c| self.maybe_tooltip(c, tooltip_text))
     }
 
+    fn text_view<'a>(
+        &self,
+        content: impl Into<Element<'a, Message>>,
+        tooltip_text: String,
+    ) -> Element<'a, Message> {
+        let icon_mode = self.config.ui.icon_color_mode;
+        container(content)
+            .style(move |theme| icon_style(theme, icon_mode))
+            .apply(|c| self.maybe_tooltip(c, tooltip_text))
+            .into()
+    }
+
+    fn icon_text_view<'a>(
+        &self,
+        icon_handle: &'static LazyLock<cosmic::widget::icon::Handle>,
+        text_content: impl ToString,
+        tooltip_text: String,
+    ) -> Element<'a, Message> {
+        let content = Row::with_children(vec![
+            icon::icon((*icon_handle).clone())
+                .size(14)
+                .into(),
+            text(text_content.to_string()).size(14).into(),
+        ])
+        .spacing(4.0)
+        .align_y(Alignment::Center);
+        self.text_view(content, tooltip_text)
+    }
+
+    fn cpu_text_view(&'_ self) -> Element<'_, Message> {
+        let usage = self.sys.global_cpu_usage();
+        let temperature = self.visible_cpu_temperature();
+        let labeled = self.uses_labeled_text();
+        let cpu_text = match (labeled, temperature) {
+            (true, Some(temp)) => format!("CPU {usage:.1}% | {temp:.1}°C"),
+            (true, None) => format!("CPU {usage:.1}%"),
+            (false, Some(temp)) => format!("{usage:.1}% | {temp:.1}°C"),
+            (false, None) => format!("{usage:.1}%"),
+        };
+        self.icon_text_view(
+            &ICON_CPU,
+            cpu_text,
+            format_cpu_tooltip(usage, temperature),
+        )
+    }
+
     pub fn cpu_view(&'_ self, vis: &[CpuView]) -> Vec<Element<'_, Message>> {
         vis.iter()
             .map(|v| match v {
+                CpuView::Text => self.cpu_text_view(),
                 CpuView::BarGlobal {
                     aspect_ratio,
                     color,
                 } => self.cpu_bar_view(
                     self.sys.global_cpu_usage(),
                     color,
-                    format_cpu_tooltip(self.sys.global_cpu_usage()),
+                    format_cpu_tooltip(self.sys.global_cpu_usage(), self.visible_cpu_temperature()),
                     *aspect_ratio,
                 ),
                 CpuView::BarCores {
@@ -355,16 +577,79 @@ impl SystemMonitorApplet {
                     color,
                 } => self.single_run_view(
                     SimpleHistoryChart::new(&self.global_cpu, 100.0, *color),
-                    format_cpu_tooltip(self.sys.global_cpu_usage()),
+                    format_cpu_tooltip(self.sys.global_cpu_usage(), self.visible_cpu_temperature()),
                     *aspect_ratio,
                 ),
             })
             .collect::<Vec<Element<_>>>()
     }
 
+    fn single_percent_text_view(
+        &'_ self,
+        icon_handle: &'static LazyLock<cosmic::widget::icon::Handle>,
+        label: &str,
+        current: u64,
+        total: u64,
+        tooltip_text: String,
+    ) -> Element<'_, Message> {
+        let value = format_percentage(current, total);
+        let text_content = if self.uses_labeled_text() {
+            format!("{label} {value}")
+        } else {
+            value
+        };
+        self.icon_text_view(icon_handle, text_content, tooltip_text)
+    }
+
+    fn percent_text_view(&'_ self) -> Element<'_, Message> {
+        let ram_pct = format_percentage(self.sys.used_memory(), self.sys.total_memory());
+        let swap_total = self.sys.total_swap();
+        let swap_pct = if swap_total == 0 {
+            "N/A".to_string()
+        } else {
+            format_percentage(self.sys.used_swap(), swap_total)
+        };
+        let text_content = if self.uses_labeled_text() {
+            format!("RAM {} | SWAP {}", ram_pct, swap_pct)
+        } else {
+            format!("{} | {}", ram_pct, swap_pct)
+        };
+        self.icon_text_view(&ICON_MEMORY, text_content, self.format_mem_tooltip())
+    }
+
     pub fn mem_view(&'_ self, vis: &[PercentView]) -> Vec<Element<'_, Message>> {
         vis.iter()
             .map(|v| match v {
+                PercentView::Text => self.percent_text_view(),
+                PercentView::TextLeft => self.single_percent_text_view(
+                    &ICON_MEMORY,
+                    "RAM",
+                    self.sys.used_memory(),
+                    self.sys.total_memory(),
+                    self.format_ram_tooltip(),
+                ),
+                PercentView::TextRight => {
+                    let total = self.sys.total_swap();
+                    if total == 0 {
+                        self.icon_text_view(
+                            &ICON_MEMORY,
+                            if self.uses_labeled_text() {
+                                "SWAP N/A"
+                            } else {
+                                "N/A"
+                            },
+                            "Swap: Not available".to_string(),
+                        )
+                    } else {
+                        self.single_percent_text_view(
+                            &ICON_MEMORY,
+                            "SWAP",
+                            self.sys.used_swap(),
+                            total,
+                            self.format_swap_tooltip(),
+                        )
+                    }
+                }
                 PercentView::Bar {
                     color_left,
                     color_right,
@@ -445,9 +730,77 @@ impl SystemMonitorApplet {
             .collect()
     }
 
+    fn io_text_view(
+        &'_ self,
+        icon_handle: &'static LazyLock<cosmic::widget::icon::Handle>,
+        back_rate: u64,
+        front_rate: u64,
+        back_label: &str,
+        front_label: &str,
+        tooltip_text: String,
+    ) -> Element<'_, Message> {
+        let labeled = self.uses_labeled_text();
+        let text_content = format!(
+            "{} {}/s | {} {}/s",
+            back_label,
+            format_bytes(back_rate),
+            front_label,
+            format_bytes(front_rate),
+        );
+        let compact = format!("{}/s | {}/s", format_bytes(back_rate), format_bytes(front_rate));
+        self.icon_text_view(
+            icon_handle,
+            if labeled { text_content } else { compact },
+            tooltip_text,
+        )
+    }
+
     pub fn net_view(&'_ self, vis: &[IoView]) -> Vec<Element<'_, Message>> {
+        let download = self.download.iter().last().copied().unwrap_or(0);
+        let upload = self.upload.iter().last().copied().unwrap_or(0);
         vis.iter()
             .map(|v| match v {
+                IoView::TextSpace => {
+                    // TextSpace es para Disk; en Net ignorar (no aplica)
+                    let labeled = self.uses_labeled_text();
+                    self.io_text_view(
+                        &ICON_NETWORK,
+                        download,
+                        upload,
+                        if labeled { "DOWN" } else { "↓" },
+                        if labeled { "UP" } else { "↑" },
+                        self.format_network_tooltip(),
+                    )
+                }
+                IoView::Text => {
+                    let labeled = self.uses_labeled_text();
+                    self.io_text_view(
+                        &ICON_NETWORK,
+                        download,
+                        upload,
+                        if labeled { "DOWN" } else { "↓" },
+                        if labeled { "UP" } else { "↑" },
+                        self.format_network_tooltip(),
+                    )
+                }
+                IoView::TextBack => self.icon_text_view(
+                    &ICON_NETWORK,
+                    if self.uses_labeled_text() {
+                        format!("DOWN {}/s", format_bytes(download))
+                    } else {
+                        format!("↓ {}/s", format_bytes(download))
+                    },
+                    self.format_network_tooltip_inner(false),
+                ),
+                IoView::TextFront => self.icon_text_view(
+                    &ICON_NETWORK,
+                    if self.uses_labeled_text() {
+                        format!("UP {}/s", format_bytes(upload))
+                    } else {
+                        format!("↑ {}/s", format_bytes(upload))
+                    },
+                    self.format_network_tooltip_inner(true),
+                ),
                 IoView::Run {
                     aspect_ratio,
                     color_front,
@@ -483,8 +836,51 @@ impl SystemMonitorApplet {
     }
 
     pub fn disk_view(&'_ self, vis: &[IoView]) -> Vec<Element<'_, Message>> {
+        let read = self.disk_read.iter().last().copied().unwrap_or(0);
+        let write = self.disk_write.iter().last().copied().unwrap_or(0);
+        let (disk_total, disk_used) = self.disk_space_used();
+        let disk_pct = if disk_total > 0 {
+            format_percentage(disk_used, disk_total)
+        } else {
+            "0%".to_string()
+        };
         vis.iter()
             .map(|v| match v {
+                IoView::TextSpace => self.icon_text_view(
+                    &ICON_DISK,
+                    if self.uses_labeled_text() {
+                        format!("DISK {}", disk_pct)
+                    } else {
+                        disk_pct.clone()
+                    },
+                    self.format_disk_space_tooltip(),
+                ),
+                IoView::Text => self.io_text_view(
+                    &ICON_DISK,
+                    read,
+                    write,
+                    if self.uses_labeled_text() { "READ" } else { "R" },
+                    if self.uses_labeled_text() { "WRITE" } else { "W" },
+                    self.format_disk_tooltip(),
+                ),
+                IoView::TextBack => self.icon_text_view(
+                    &ICON_DISK,
+                    if self.uses_labeled_text() {
+                        format!("READ {}/s", format_bytes(read))
+                    } else {
+                        format!("R {}/s", format_bytes(read))
+                    },
+                    self.format_disk_tooltip_inner(false),
+                ),
+                IoView::TextFront => self.icon_text_view(
+                    &ICON_DISK,
+                    if self.uses_labeled_text() {
+                        format!("WRITE {}/s", format_bytes(write))
+                    } else {
+                        format!("W {}/s", format_bytes(write))
+                    },
+                    self.format_disk_tooltip_inner(true),
+                ),
                 IoView::Run {
                     color_front,
                     color_back,
@@ -519,6 +915,25 @@ impl SystemMonitorApplet {
             .collect()
     }
 
+    fn gpu_text_view(
+        &'_ self,
+        gpu_index: usize,
+        data: &GpuData,
+    ) -> Element<'_, Message> {
+        let usage_pct = format!("{}%", data.usage);
+        let vram_pct = format_percentage(data.used_vram, data.total_vram);
+        let text_content = if self.uses_labeled_text() {
+            format!("GPU {} | VRAM {}", usage_pct, vram_pct)
+        } else {
+            format!("{} | {}", usage_pct, vram_pct)
+        };
+        self.icon_text_view(
+            &ICON_GPU,
+            text_content,
+            format_gpu_tooltip(gpu_index, data),
+        )
+    }
+
     pub fn gpu_view(&'_ self, vis: &[PercentView]) -> Vec<Element<'_, Message>> {
         self.gpus
             .data()
@@ -527,6 +942,23 @@ impl SystemMonitorApplet {
             .flat_map(|(idx, data)| {
                 vis.iter()
                     .map(|v| match v {
+                        PercentView::Text => self.gpu_text_view(idx, data),
+                        PercentView::TextLeft => self.icon_text_view(
+                            &ICON_GPU,
+                            if self.uses_labeled_text() {
+                                format!("GPU {}%", data.usage)
+                            } else {
+                                format!("{}%", data.usage)
+                            },
+                            format_gpu_usage_tooltip(idx, data),
+                        ),
+                        PercentView::TextRight => self.single_percent_text_view(
+                            &ICON_GPU,
+                            "VRAM",
+                            data.used_vram,
+                            data.total_vram,
+                            format_gpu_vram_tooltip(idx, data),
+                        ),
                         PercentView::Bar {
                             color_left,
                             color_right,

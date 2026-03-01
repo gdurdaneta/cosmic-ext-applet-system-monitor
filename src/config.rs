@@ -14,7 +14,7 @@ use crate::{
     color::Color,
     components::bar::SortMethod,
 };
-pub const CONFIG_VERSION: u64 = 2;
+pub const CONFIG_VERSION: u64 = 3;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Config {
@@ -23,6 +23,7 @@ pub struct Config {
     pub components: Box<[ComponentConfig]>,
     pub layout: LayoutConfig,
     pub tooltip_enabled: bool,
+    pub ui: UiConfig,
 }
 
 impl CosmicConfigEntry for Config {
@@ -33,6 +34,7 @@ impl CosmicConfigEntry for Config {
         ConfigSet::set(&tx, "components", &self.components)?;
         ConfigSet::set(&tx, "layout", &self.layout)?;
         ConfigSet::set(&tx, "tooltip_enabled", self.tooltip_enabled)?;
+        ConfigSet::set(&tx, "ui", &self.ui)?;
         tx.commit()
     }
     fn get_entry(config: &CosmicConfig) -> Result<Self, (Vec<ConfigError>, Self)> {
@@ -59,6 +61,7 @@ impl CosmicConfigEntry for Config {
         config_get!(components, Box<[ComponentConfig]>);
         config_get!(layout, LayoutConfig);
         config_get!(tooltip_enabled, bool);
+        config_get!(ui, UiConfig);
 
         if errors.is_empty() {
             Ok(default)
@@ -97,11 +100,50 @@ impl CosmicConfigEntry for Config {
                 "components" => config_set!(components, Box<[ComponentConfig]>),
                 "layout" => config_set!(layout, LayoutConfig),
                 "tooltip_enabled" => config_set!(tooltip_enabled, bool),
+                "ui" => config_set!(ui, UiConfig),
                 _ => {}
             }
         }
         (errors, keys)
     }
+}
+
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum IconColorMode {
+    Auto,
+    White,
+    Black,
+}
+
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum TextFormatMode {
+    Compact,
+    Labeled,
+}
+
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum QuickIntervalProfile {
+    Fast,
+    Normal,
+    Slow,
+}
+
+#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct EnabledModules {
+    pub cpu: bool,
+    pub mem: bool,
+    pub net: bool,
+    pub disk: bool,
+    pub gpu: bool,
+}
+
+#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct UiConfig {
+    pub show_cpu_temperature: bool,
+    pub icon_color_mode: IconColorMode,
+    pub text_format_mode: TextFormatMode,
+    pub quick_interval_profile: QuickIntervalProfile,
+    pub enabled_modules: EnabledModules,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -192,6 +234,16 @@ pub enum IoView {
         alias = "RunChartUpload"
     )]
     RunFront { color: Color, aspect_ratio: f32 },
+
+    #[serde(rename = "Text")]
+    Text,
+    /// Solo para Disk: muestra % de espacio usado
+    #[serde(rename = "TextSpace")]
+    TextSpace,
+    #[serde(alias = "TextRead", alias = "TextDownload")]
+    TextBack,
+    #[serde(alias = "TextWrite", alias = "TextUpload")]
+    TextFront,
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -201,6 +253,8 @@ pub enum CpuView {
         color: Color,
         aspect_ratio: f32,
     },
+    #[serde(rename = "Text")]
+    Text,
     BarGlobal {
         color: Color,
         aspect_ratio: f32,
@@ -251,6 +305,13 @@ pub enum PercentView {
     BarLeft { color: Color, aspect_ratio: f32 },
     #[serde(alias = "BarChartSwap", alias = "BarChartVram")]
     BarRight { color: Color, aspect_ratio: f32 },
+
+    #[serde(rename = "Text")]
+    Text,
+    #[serde(alias = "TextRam", alias = "TextUsage")]
+    TextLeft,
+    #[serde(alias = "TextSwap", alias = "TextVram")]
+    TextRight,
 }
 
 impl Default for Config {
@@ -261,12 +322,37 @@ impl Default for Config {
                 ComponentConfig::default_cpu(),
                 ComponentConfig::default_mem(),
                 ComponentConfig::default_disk(),
-                ComponentConfig::default_net(),
+                // Red omitido por defecto
                 ComponentConfig::default_gpu(),
             ]
             .into(),
             sampling: SamplingConfig::default(),
             tooltip_enabled: false,
+            ui: UiConfig::default(),
+        }
+    }
+}
+
+impl Default for EnabledModules {
+    fn default() -> Self {
+        Self {
+            cpu: true,
+            mem: true,
+            net: false,
+            disk: true,
+            gpu: true,
+        }
+    }
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            show_cpu_temperature: true,
+            icon_color_mode: IconColorMode::Auto,
+            text_format_mode: TextFormatMode::Labeled,
+            quick_interval_profile: QuickIntervalProfile::Normal,
+            enabled_modules: EnabledModules::default(),
         }
     }
 }
@@ -285,23 +371,23 @@ impl Default for SamplingConfig {
     fn default() -> Self {
         SamplingConfig {
             cpu: Sampling {
-                update_interval: 1000,
+                update_interval: 5000,  // 5 segundos
                 sampling_window: 60,
             },
             mem: Sampling {
-                update_interval: 2000,
+                update_interval: 5000,
                 sampling_window: 30,
             },
             net: Sampling {
-                update_interval: 2000,
+                update_interval: 5000,
                 sampling_window: 30,
             },
             disk: Sampling {
-                update_interval: 1000,
+                update_interval: 5000,
                 sampling_window: 60,
             },
             gpu: Sampling {
-                update_interval: 2000,
+                update_interval: 5000,
                 sampling_window: 30,
             },
         }
@@ -310,62 +396,23 @@ impl Default for SamplingConfig {
 
 impl ComponentConfig {
     fn default_cpu() -> Self {
-        let color = Color::accent_blue;
-
-        ComponentConfig::Cpu(
-            [CpuView::Run {
-                aspect_ratio: 1.5,
-                color,
-            }]
-            .into(),
-        )
+        ComponentConfig::Cpu([CpuView::Text].into())
     }
 
     fn default_mem() -> Self {
-        let color_back = Color::accent_green;
-        let color_front = Color::accent_purple;
-        ComponentConfig::Mem(
-            [PercentView::Run {
-                color_back,
-                color_front,
-                aspect_ratio: 1.5,
-            }]
-            .into(),
-        )
+        ComponentConfig::Mem([PercentView::Text].into())
     }
 
+    #[allow(dead_code)] // Usado cuando el usuario añade Net en la config
     fn default_net() -> Self {
-        ComponentConfig::Net(
-            [IoView::Run {
-                color_front: Color::accent_yellow,
-                color_back: Color::accent_red,
-                aspect_ratio: 1.5,
-            }]
-            .into(),
-        )
+        ComponentConfig::Net([IoView::Text].into())
     }
 
     fn default_disk() -> Self {
-        ComponentConfig::Disk(
-            [IoView::Run {
-                color_front: Color::accent_orange,
-                color_back: Color::accent_pink,
-                aspect_ratio: 1.5,
-            }]
-            .into(),
-        )
+        ComponentConfig::Disk([IoView::TextSpace].into())  // % de espacio usado
     }
 
     fn default_gpu() -> Self {
-        let color_usage = Color::accent_warm_grey;
-        let color_vram = Color::accent_indigo;
-        ComponentConfig::Gpu(
-            [PercentView::Run {
-                color_back: color_usage,
-                color_front: color_vram,
-                aspect_ratio: 1.5,
-            }]
-            .into(),
-        )
+        ComponentConfig::Gpu([PercentView::Text].into())
     }
 }

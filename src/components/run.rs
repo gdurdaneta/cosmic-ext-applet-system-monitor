@@ -239,31 +239,11 @@ impl Program<Message, Theme, Renderer> for Background {
         &self,
         _state: &Self::State,
         renderer: &Renderer,
-        theme: &Theme,
+        _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry<Renderer>> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        let bg_color = theme.cosmic().background.base;
-
-        let mut bg_builder = path::Builder::new();
-        let external_bounds = bounds.expand(10.0);
-        let Point { x, y } = external_bounds.position();
-        bg_builder.move_to(Point { x, y });
-        bg_builder.line_to(Point {
-            x: x + external_bounds.width,
-            y,
-        });
-
-        let background = bg_builder.build();
-
-        frame.fill(
-            &background,
-            Fill {
-                style: stroke::Style::Solid(bg_color.into()),
-                ..Default::default()
-            },
-        );
+        let frame = Frame::new(renderer, bounds.size());
         vec![frame.into_geometry()]
     }
 }

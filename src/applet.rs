@@ -384,8 +384,10 @@ impl SystemMonitorApplet {
 
 pub fn base_background(theme: &Theme) -> container::Style {
     let on_primary = cosmic::iced::Color::from(theme.cosmic().primary.on);
+    let mut base_color = cosmic::iced::Color::from(theme.cosmic().primary.base);
+    base_color.a *= 0.5;
     container::Style {
-        background: Some(cosmic::iced::Color::from(theme.cosmic().primary.base).into()),
+        background: Some(base_color.into()),
         icon_color: Some(cosmic::iced::Color::WHITE),
         text_color: Some(on_primary),
         ..container::Style::default()
